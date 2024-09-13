@@ -1,0 +1,669 @@
+---
+title: "Intern Delaware Survey Results"
+subtitle: "Pre- and Post-Program"
+format: html
+editor: source
+execute: 
+  echo: false
+  warning: false
+toc: true
+toc-location: "left"
+---
+
+```{r}
+if (!require("pacman")) install.packages("pacman")
+
+pacman::p_load(
+   here
+  ,qualtRics
+  ,ggrepel
+  ,klaR
+  ,tidyverse
+  ,ggtext
+)
+
+theme_set(theme_minimal())
+
+intern_de_blue <- "#008DD4"
+intern_de_yellow <- "#FDB746"
+```
+
+```{r}
+registration <- read_survey("2024+Intern+Delaware+-+Registration+Survey_September+6,+2024_04.49.csv")
+nps_intern <- read_survey("2024+NPS+Survey+_+Interns_September+12,+2024_18.58.csv")
+```
+
+```{r}
+registration <- 
+  registration %>% 
+  # If UniqueID is blank, then add one based upon last name
+  mutate(UniqueID = if_else(is.na(UniqueID), last_name, UniqueID)) %>% 
+  # Get a count of each UniqueID
+  add_count(UniqueID) %>% 
+  # If the count is greater than 1, then add in the first name to the ID
+  mutate(UniqueID = if_else(n > 1, as.character(glue::glue("{last_name}{first_name}")), UniqueID)) %>% 
+  # Add the count of NA values to each record
+  mutate(na_count = rowSums(is.na(.))) %>% 
+  # For each UniqueID, only include the observation with the least NA values and the earliest date recorded
+  group_by(UniqueID) %>% 
+  filter(na_count == min(na_count),
+         RecordedDate...8 == min(RecordedDate...8)) %>% 
+  ungroup() %>% 
+  group_by(personal_email) %>% 
+  filter(na_count == min(na_count),
+         RecordedDate...8 == min(RecordedDate...8)) %>% 
+  ungroup() %>% 
+  select(-n, -na_count)
+  
+```
+
+```{r}
+nps_intern <- 
+  nps_intern %>% 
+  mutate(na_count = rowSums(is.na(.))) %>% 
+  # For each UniqueID, only include the observation with the least NA values and the earliest date recorded
+  group_by(RecipientEmail) %>% 
+  filter(na_count == min(na_count),
+         RecordedDate == min(RecordedDate)) %>% 
+  ungroup() %>% 
+  select(-na_count)
+```
+
+```{r}
+intern_joined <-
+  registration %>% 
+  left_join(nps_intern, 
+            by = c("personal_email" = "RecipientEmail"),
+            suffix = c("_pre", "_post")) %>% 
+  select(personal_email, first_name, last_name, work_email, state, state_other,
+         `employer`,
+         university, university_other, academic_level, `academic level_other`,
+         participating, interesting, goals, goals_other, 
+         preferences_1, preferences_2, preferences_3,
+         `App Registration`:`Coffee & Convo - Courageous Convos`,
+         `Enhance Overall Y/N`,
+         `NPS Recommend INT_NPS_GROUP`,
+         `NPS Recommend INT`,
+         `NPS Recommend - Text`,
+         `NPS Rating_NPS_GROUP`,
+         `NPS Rating`,
+         Satisfaction_1,
+         Satisfaction_2,
+         Satisfaction_3,
+         Satisfaction_4,
+         Preferences_1,
+         Preferences_2,
+         Preferences_3,
+         General#,
+         # `DYPN emails`,
+         # `Follow Up`,
+         # `Follow Up E-Mail`,
+         # SolutionRevision,
+         # ProjectCategory,
+         # ProjectType
+         ) %>% 
+  rename(preferences_live_DE_pre = preferences_1,
+         preferences_work_DE_pre = preferences_2,
+         preferences_work_emp_pre = preferences_3,
+         preferences_live_DE_post = Preferences_1,
+         preferences_work_DE_post = Preferences_2,
+         preferences_work_emp_post = Preferences_3,
+         satisfaction_communication = Satisfaction_1,
+         satisfaction_event_content = Satisfaction_2,
+         satisfaction_event_schedule = Satisfaction_3,
+         satisfaction_overall_experience = Satisfaction_4) %>% 
+  mutate(across(starts_with("preferences"), ~factor(.,
+                                                    levels = c("Strongly disagree", "Somewhat disagree",
+                                                               "Neutral",
+                                                               "Somewhat agree", "Strongly agree"))),
+         across(starts_with("satisfaction"), ~factor(.,
+                                                     levels = c("Extremely dissatisfied", "Moderately dissatisfied",
+                                                                "Neither satisfied nor dissatisfied",
+                                                                "Moderately satisfied", "Extremely satisfied")))) %>% 
+  rename_with(~as.character(glue::glue("attendance_{.}")), .cols = `Kick off BBQ!`:`Coffee & Convo - Courageous Convos`) %>% 
+  mutate(across(starts_with("attendance"), ~if_else(! is.na(.), T, F)))
+```
+
+```{r}
+intern_goals <- 
+  intern_joined %>% 
+  select(personal_email, goals) %>% 
+  mutate(goals = str_extract_all(goals, "[^,]+")) %>% 
+  unnest(goals) %>%
+  mutate(status = T) %>% 
+  pivot_wider(names_from = goals,
+              values_from = status,
+              names_prefix = "goals_") %>% 
+  unchop(everything()) %>% 
+  mutate(across(-personal_email, ~if_else(is.na(.), F, .))) %>% 
+  mutate(across(c(-personal_email, -goals_NA), ~if_else(`goals_All of the above`, T, .)))
+
+intern_interest <- 
+  intern_joined %>% 
+  select(personal_email, interesting) %>% 
+  mutate(interesting = str_extract_all(interesting, "[^,]+")) %>% 
+  unnest(interesting) %>%
+  mutate(status = T) %>% 
+  pivot_wider(names_from = interesting,
+              values_from = status,
+              names_prefix = "interest_") %>% 
+  unchop(everything()) %>% 
+  mutate(across(-personal_email, ~if_else(is.na(.), F, .)))
+```
+
+```{r}
+intern_joined_final <-
+  intern_joined %>% 
+  left_join(intern_goals,
+            by = "personal_email") %>% 
+  relocate(starts_with("goals_"), .after = goals) %>% 
+  left_join(intern_interest,
+            by = "personal_email") %>% 
+  relocate(starts_with("interest_"), .after = interesting) %>% 
+  select(-goals, -interesting)
+```
+
+```{r}
+write_csv(intern_joined_final, "intern_joined_final.csv")
+```
+
+# Preferences
+
+```{r}
+preferences_raw <- 
+  intern_joined_final %>% 
+  select(personal_email, starts_with("preferences")) %>% 
+  pivot_longer(cols = -personal_email,
+               names_to = "category") %>% 
+  mutate(category = str_remove(category, "preferences_"),
+         type = str_extract(category, "[a-z]+$"),
+         category = str_remove(category, "_[a-z]+$"),
+         level_value = as.numeric(value),
+         type = factor(type, levels = c("pre", "post")))
+
+preferences_means <-
+  preferences_raw %>% 
+  group_by(category, type) %>% 
+  summarize(mean_rating = mean(level_value, na.rm = T)) %>% 
+  ungroup()
+
+preferences_means_change <- 
+  preferences_means %>% 
+  pivot_wider(names_from = type,
+              values_from = mean_rating) %>% 
+  mutate(percent_change = (post - pre) / pre,
+         category = case_when(
+           category == "live_DE" ~ "I would choose to live in Delaware post graduation.",
+           category == "work_DE" ~ "I would choose to work in Delaware post graduation.",
+           category == "work_emp" ~ "I would choose to work at my employer post graduation."
+         ),
+         category = str_wrap(category, width = 30),
+         text_placement = (pre + post) / 2,
+         change_type = case_when(
+           percent_change > 0 ~ "+",
+           percent_change == 0 ~ "",
+           percent_change < 0 ~ "-"
+         ),
+         change_text = as.character(glue::glue("{change_type}{scales::percent(percent_change)}")))
+```
+
+```{r}
+preferences_means %>% 
+  mutate(category = case_when(
+    category == "live_DE" ~ "I would choose to live in Delaware post graduation.",
+    category == "work_DE" ~ "I would choose to work in Delaware post graduation.",
+    category == "work_emp" ~ "I would choose to work at my employer post graduation."
+  ),
+  category = str_wrap(category, width = 30),
+  horizontal = if_else(type == "pre", 1, 0),
+  nudge = if_else(type == "pre", -0.1, 0.1)) %>% 
+  ggplot(aes(y = category,
+             x = mean_rating)) +
+  geom_segment(data = preferences_means_change,
+               aes(x = pre,
+                   xend = post,
+                   y = category,
+                   yend = category),
+               color = "gray",
+               arrow = arrow(length = unit(0.5, "lines"),
+                             type = "closed")) +
+  geom_text(data = preferences_means_change,
+            aes(x = text_placement,
+                y = category,
+                label = change_text),
+            size = 3,
+            fontface = "bold",
+            vjust = 0,
+            nudge_y = 0.05) +
+  geom_point(aes(color = type),
+             show.legend = FALSE) +
+  geom_text(aes(label = round(mean_rating, 2),
+                hjust = horizontal),
+            size = 3,
+            nudge_x = if_else(preferences_means$type == "pre", -0.05, 0.05)) +
+  scale_x_continuous(limits = c(1, 5.15),
+                     labels = str_wrap(c("Strongly disagree (1)", "Somewhat disagree (2)",
+                                "Neutral (3)",
+                                "Somewhat agree (4)", "Strongly agree (5)"), 12)) +
+  scale_color_manual(values = c(intern_de_yellow, intern_de_blue)) +
+  labs(title = "Change in mean participant preferences",
+       subtitle = glue::glue("From <b><span style = color:{intern_de_yellow}>Pre-Program</span></b> to <b><span style = color:{intern_de_blue}>Post-Program</span></b>")) +
+  theme(plot.title = element_textbox_simple(face = "bold"),
+        plot.subtitle = element_textbox_simple(),
+        plot.title.position = "plot",
+        axis.title = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major.y = element_blank())
+```
+
+
+```{r}
+preferences_raw %>% 
+  filter(! is.na(value)) %>% 
+  group_by(category, type, value) %>% 
+  mutate(n = n()) %>% 
+  ungroup() %>% 
+  group_by(category, type) %>% 
+  mutate(n_cat_type = n()) %>% 
+  ungroup() %>% 
+  mutate(per_cat_type = n / n_cat_type) %>% 
+  distinct(type, category, value, n, n_cat_type, per_cat_type) %>% 
+  mutate(type = case_when(
+    type == "pre" ~ "Pre-Program",
+    type == "post" ~ "Post-Program"
+  ),
+  type = factor(type, c("Pre-Program", "Post-Program")),
+  category = case_when(
+    category == "live_DE" ~ "I would choose to live in Delaware post graduation.",
+    category == "work_DE" ~ "I would choose to work in Delaware post graduation.",
+    category == "work_emp" ~ "I would choose to work at my employer post graduation."
+  ),
+  category = str_wrap(category, width = 30)) %>% 
+  ggplot(aes(y = value,
+             x = per_cat_type)) +
+  geom_col(fill = intern_de_blue) +
+  geom_text(aes(label = scales::percent(per_cat_type)),
+            size = 3,
+            hjust = 0,
+            nudge_x = 0.01) +
+  facet_grid(rows = vars(type),
+             cols = vars(category),
+             switch = "y") +
+  scale_x_continuous(labels = scales::percent,
+                     expand = c(0, 0),
+                     limits = c(0, 0.7)) +
+  labs(title = "Percent of participants selecting preferences",
+       subtitle = "Comparison of pre- and post-survey results") +
+  coord_cartesian(clip = "off") +
+  annotate("segment", x = -Inf, xend = -Inf, y = -Inf, yend = Inf,
+           color = "gray") +
+  annotate("segment", x = -Inf, xend = Inf, y = -Inf, yend = -Inf,
+           color = "gray") +
+  theme(axis.title = element_blank(),
+        panel.spacing = unit(1, "line"),
+        strip.text = element_text(face = "bold"),
+        plot.title = element_text(face = "bold"),
+        plot.title.position = "plot",
+        strip.placement = "outside",
+        panel.grid.minor = element_blank(),
+        panel.grid.major.y = element_blank())
+```
+
+# Satisfaction
+
+```{r}
+satisfaction_raw <-
+  intern_joined_final %>% 
+  select(personal_email, starts_with("satisfaction")) %>% 
+  pivot_longer(cols = -personal_email,
+               names_to = "category") %>% 
+  mutate(category = str_remove(category, "satisfaction_"),
+         level_value = as.numeric(value))
+
+satisfaction_means <-
+  satisfaction_raw %>% 
+  group_by(category) %>% 
+  summarize(mean_value = mean(level_value, na.rm = T)) %>% 
+  ungroup()
+
+satisfaction_raw %>% 
+  arrange(category, value) %>% 
+  filter(! is.na(value)) %>% 
+  left_join(satisfaction_means, by = "category") %>% 
+  mutate(category = str_replace_all(category, "_", " "),
+         category = str_to_title(category),
+         category = glue::glue("<b>{category}</b><br>(mean = {round(mean_value, 2)})")) %>% 
+  group_by(category, value) %>% 
+  mutate(n = n()) %>% 
+  ungroup() %>% 
+  group_by(category) %>% 
+  mutate(n_cat_type = n()) %>% 
+  ungroup() %>% 
+  mutate(per_cat_type = n / n_cat_type) %>% 
+  distinct(category, value, n, n_cat_type, per_cat_type) %>% 
+  ggplot(aes(y = value,
+             x = per_cat_type)) +
+  geom_col(fill = intern_de_blue) +
+  geom_text(aes(label = scales::percent(per_cat_type)),
+            size = 3,
+            hjust = 0,
+            nudge_x = 0.01) +
+  facet_grid(~category) +
+  scale_x_continuous(labels = scales::percent,
+                     limits = c(0, 0.8),
+                     expand = c(0, 0)) +
+  scale_y_discrete(labels = ~str_wrap(., 10)) +
+  labs(title = "Percent of participants selecting satisfaction by category") +
+  coord_cartesian(clip = "off") +
+  annotate("segment", x = -Inf, xend = -Inf, y = -Inf, yend = Inf,
+           color = "gray") +
+  theme(strip.text = element_textbox_simple(),
+        axis.title = element_blank(),
+        panel.spacing = unit(1.5, "line"),
+        plot.title = element_text(face = "bold"),
+        plot.title.position = "plot",
+        panel.grid.minor = element_blank(),
+        panel.grid.major.y = element_blank())
+```
+
+# Goals
+
+```{r}
+intern_joined_final %>% 
+  select(personal_email, starts_with("goals"), -goals_other, -goals_NA) %>% 
+  pivot_longer(-personal_email) %>% 
+  mutate(name = str_remove(name, "goals_"),
+         name = if_else(name == "Other:", "Other", name)) %>% 
+  group_by(name) %>% 
+  summarize(percent_selected = mean(value)) %>% 
+  ungroup() %>% 
+  mutate(name = str_wrap(name, width = 30),
+         name = fct_reorder(name, percent_selected)) %>% 
+  filter(name != "All of the above") %>% 
+  ggplot(aes(x = percent_selected,
+             y = name)) +
+  geom_col(fill = intern_de_blue) +
+  geom_text(aes(label = scales::percent(percent_selected)),
+            size = 3,
+            hjust = 0,
+            nudge_x = 0.01) +
+  scale_x_continuous(labels = scales::percent,
+                     expand = c(0, 0),
+                     limits = c(0, 1)) +
+  labs(title = "Percent of participants selecting goals by category") +
+  coord_cartesian(clip = "off") +
+  annotate("segment", x = -Inf, xend = -Inf, y = -Inf, yend = Inf,
+           color = "gray") +
+  theme(strip.text = element_textbox_simple(),
+        axis.title = element_blank(),
+        panel.spacing = unit(1, "line"),
+        plot.title = element_text(face = "bold"),
+        plot.title.position = "plot",
+        panel.grid.minor = element_blank(),
+        panel.grid.major.y = element_blank())
+```
+
+```{r}
+#| eval: false
+
+goals_df <- 
+  intern_joined_final %>% 
+  select(starts_with("goals"), -goals_other, -goals_NA, -`goals_All of the above`, -`goals_Other:`) %>% 
+  as.data.frame() 
+
+kmodes_withindiff <- function(df, k) {
+  
+  modes <- kmodes(df, modes = k, weighted = FALSE)
+  
+  mean(modes$withindiff)
+  
+}
+
+1:10 %>% 
+  map_dbl(~kmodes_withindiff(goals_df, .)) %>% 
+  data.frame(k = 1:10,
+             withindiff = .) %>% 
+  ggplot(aes(x = k,
+             y = withindiff)) +
+  geom_point() +
+  geom_line()
+
+goals_df %>% 
+  kmodes(modes = 5, weighted = FALSE) %>% 
+  .$modes %>% 
+  rownames_to_column(var = "cluster") %>% 
+  pivot_longer(-cluster,
+               names_to = "goal") %>% 
+  mutate(goal = str_remove(goal, "goals_"),
+         value = as.logical(value),
+         value = as.numeric(value)) %>% 
+  ggplot(aes(y = goal,
+             x = value)) +
+  geom_col() +
+  facet_wrap(~cluster)
+
+
+```
+
+# Interests
+
+```{r}
+#| fig.height = 8
+
+intern_joined_final %>% 
+  select(personal_email, starts_with("interest"), -interest_NA) %>% 
+  pivot_longer(-personal_email) %>% 
+  mutate(name = str_remove(name, "interest_")) %>% 
+  group_by(name) %>% 
+  summarize(percent_selected = mean(value)) %>% 
+  ungroup() %>% 
+  mutate(name = str_wrap(name, width = 30),
+         name = fct_reorder(name, percent_selected)) %>% 
+  ggplot(aes(x = percent_selected,
+             y = name)) +
+  geom_col(fill = intern_de_blue) +
+  geom_text(aes(label = scales::percent(percent_selected)),
+            size = 3,
+            hjust = 0,
+            nudge_x = 0.01) +
+  scale_x_continuous(labels = scales::percent,
+                     expand = c(0, 0),
+                     limits = c(0, 1.05)) +
+  labs(title = "Percent of participants selecting interests by category") +
+  coord_cartesian(clip = "off") +
+  annotate("segment", x = -Inf, xend = -Inf, y = -Inf, yend = Inf,
+           color = "gray") +
+  theme(strip.text = element_textbox_simple(),
+        axis.title = element_blank(),
+        panel.spacing = unit(1, "line"),
+        plot.title = element_text(face = "bold"),
+        plot.title.position = "plot",
+        panel.grid.minor = element_blank(),
+        panel.grid.major.y = element_blank())
+```
+
+# Attendance
+
+```{r}
+intern_joined_final %>% 
+  select(personal_email, starts_with("interest"), starts_with("attendance")) %>% 
+  pivot_longer(-personal_email) %>% 
+  mutate(type = str_extract(name, "[a-z]+"),
+         name = str_remove(name, "[a-z]+_")) %>% 
+  mutate(name = str_remove(name, " \\(Hybrid\\)| \\(In-Person\\)| \\- Webinar"),
+         name = case_when(
+           str_detect(name, "Axe Throwing") ~ "Axe Throwing @ Constitution Yards",
+           str_detect(name, "Build your Network") ~ "Build your Network L&L w/ Leadership Delaware",
+           str_detect(name, "Bus") ~ "Bus Trip to Legislative Hall",
+           str_detect(name, "Kick") ~ "Kick-off BBQ",
+           str_detect(name, "Volunteer") ~ "Volunteer Experience",
+           .default = as.character(name)
+         )) %>% 
+  group_by(type, name) %>% 
+  summarize(percent_selected = mean(value)) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = type,
+              values_from = percent_selected) %>% 
+  filter(! is.na(interest),
+         ! is.na(attendance)) %>% 
+  ggplot(aes(x = interest,
+             y = attendance)) +
+  geom_point() +
+  geom_smooth(color = intern_de_blue,
+              method = "lm",
+              se = FALSE) +
+  geom_text_repel(aes(label = name),
+                  size = 3) +
+  scale_x_continuous(labels = scales::percent) +
+  scale_y_continuous(labels = scales::percent) +
+  expand_limits(x = 0,
+                y = 0) +
+  labs(title = "Percent of Participants Indicating Interest vs. Percent of Participants in Attendance",
+       subtitle = "For selected events",
+       x = "Percent (%) of Participants Indicating Interest",
+       y = "Percent (%) of Participants in Attendance") +
+  theme(axis.title = element_text(face = "bold"),
+        plot.title = element_text(face = "bold"),
+        plot.title.position = "plot")
+```
+
+# Attendance Influence on Completion
+
+```{r}
+attendance_counts <- 
+  intern_joined_final %>% 
+  select(personal_email, `employer`, starts_with("attendance")) %>% 
+  pivot_longer(c(-`employer`, -personal_email)) %>% 
+  group_by(personal_email, `employer`) %>% 
+  summarize(attendance_count = sum(value)) %>% 
+  ungroup() %>% 
+  arrange(-attendance_count)
+```
+
+```{r}
+attendance_average_employer <- 
+  attendance_counts %>% 
+  group_by(`employer`) %>% 
+  summarize(average_attendance = mean(attendance_count),
+            n = n()) %>% 
+  ungroup() %>% 
+  arrange(-average_attendance)
+```
+
+```{r}
+attendance_average_employer %>% 
+  mutate(`employer` = fct_reorder(`employer`, average_attendance)) %>% 
+  filter(! is.na(`employer`)) %>% 
+  ggplot(aes(y = `employer`,
+             x = average_attendance)) +
+  geom_col(fill = intern_de_blue) +
+  geom_text(aes(label = round(average_attendance, 2)),
+            size = 3,
+            hjust = 0,
+            nudge_x = 0.1) +
+  scale_x_continuous(expand = c(0, 0),
+                     limits = c(0, 20)) +
+  labs(title = "Average participation rate by employer") +
+  coord_cartesian(clip = "off") +
+  annotate("segment", x = -Inf, xend = -Inf, y = -Inf, yend = Inf,
+           color = "gray") +
+  theme(axis.title = element_blank(),
+        panel.spacing = unit(1, "line"),
+        plot.title = element_text(face = "bold"),
+        plot.title.position = "plot",
+        panel.grid.minor = element_blank(),
+        panel.grid.major.y = element_blank())
+```
+
+```{r}
+attendance_counts %>% 
+  left_join(attendance_average_employer, by = "employer") %>% 
+  filter(! is.na(`employer`)) %>% 
+  mutate(`employer` = fct_reorder(`employer`, average_attendance)) %>% 
+  ggplot(aes(y = `employer`,
+             x = attendance_count)) +
+  geom_boxplot(fill = intern_de_blue,
+               color = "gray") +
+  scale_x_continuous(expand = c(0, 0),
+                     limits = c(0, 20)) +
+  labs(title = "Intern participation distribution by employer") +
+  coord_cartesian(clip = "off") +
+  theme(axis.title = element_blank(),
+        plot.title = element_text(face = "bold"),
+        plot.title.position = "plot",
+        panel.grid.minor = element_blank(),
+        panel.grid.major.y = element_blank())
+```
+
+
+```{r}
+attendance_average_employer %>% 
+  ggplot(aes(x = n,
+             y = average_attendance)) +
+  geom_point() +
+  geom_smooth(color = intern_de_blue,
+              method = "lm",
+              se = FALSE) +
+  expand_limits(x = 0,
+                y = 0) +
+  geom_text_repel(aes(label = `employer`),
+                  size = 3) +
+  expand_limits(x = 0,
+                y = 0) +
+  labs(title = "Number of Participating Interns vs Average Intern Event Attendance",
+       subtitle = "For participating employers",
+       x = "Count of Registered Interns",
+       y = "Mean number of events attended") +
+  theme(axis.title = element_text(face = "bold"),
+        plot.title = element_text(face = "bold"),
+        plot.title.position = "plot")
+```
+
+```{r}
+completed_survey_event_counts <- 
+  preferences_raw %>% 
+  group_by(personal_email, type) %>% 
+  summarize(level_value_mean = mean(level_value)) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = type,
+              values_from = level_value_mean) %>% 
+  left_join(attendance_counts,
+            by = "personal_email") %>% 
+  mutate(completed_post = ! is.na(post)) %>% 
+  group_by(completed_post) %>% 
+  summarize(event_count_mean = mean(attendance_count)) %>% 
+  ungroup()
+```
+
+```{r}
+
+preferences_raw %>% 
+  group_by(personal_email, type) %>% 
+  summarize(level_value_mean = mean(level_value)) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = type,
+              values_from = level_value_mean) %>% 
+  left_join(attendance_counts,
+            by = "personal_email") %>% 
+  mutate(completed_post = ! is.na(post)) %>% 
+  left_join(completed_survey_event_counts, by = "completed_post") %>% 
+  mutate(completed_post = if_else(! is.na(post), "Completed Post Survey", "Did Not Complete Post Survey"),
+         completed_post = fct_reorder(completed_post, event_count_mean)) %>% 
+  ggplot(aes(y = completed_post,
+             x = attendance_count)) +
+  geom_boxplot(fill = intern_de_blue,
+               color = "gray") +
+  geom_text(aes(x = event_count_mean,
+                y = completed_post,
+                label = glue::glue("mean = {round(event_count_mean, 2)} events")),
+            vjust = 0,
+            nudge_y = 0.4,
+            size = 3) +
+  labs(title = "Distribution of events attended by whether a post survey was completed") +
+  coord_cartesian(clip = "off") +
+  theme(axis.title = element_blank(),
+        plot.title = element_text(face = "bold"),
+        plot.title.position = "plot",
+        panel.grid.minor = element_blank(),
+        panel.grid.major.y = element_blank())
+```

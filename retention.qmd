@@ -1,0 +1,182 @@
+---
+title: "Retention Data"
+format: html
+editor: visual
+---
+
+```{r}
+if (!require("pacman")) install.packages("pacman")
+
+pacman::p_load(
+   here
+  ,qualtRics
+  ,tidyverse
+  ,networkD3
+)
+```
+
+```{r}
+retention <- read_survey("Retention+Survey+-+Corporate+Partners_November+7,+2023_11.34.csv")
+
+retention_lookup <- read_csv("Retention+Survey+-+Corporate+Partners_November+7,+2023_11.34.csv") %>% 
+  slice(1) %>% 
+  t() %>% 
+  data.frame(field_name = .) %>% 
+  rownames_to_column(var = "original")
+```
+
+
+```{r}
+retention_clean_long <-
+  retention %>% 
+  select(-Status, -IPAddress, -Progress, -`Duration (in seconds)`, -Finished, -RecipientLastName, -RecipientFirstName, -RecipientEmail, -ExternalReference, -LocationLatitude, -LocationLongitude, -DistributionChannel, -UserLanguage, -SolutionRevision, -ProjectCategory, -ProjectType) %>% 
+  mutate(across(everything(), as.character)) %>% 
+  pivot_longer(cols = c(-StartDate, -EndDate, -RecordedDate, -ResponseId, -`Select Company`),
+               names_to = "original") %>% 
+  left_join(retention_lookup, by = "original") %>% 
+  filter(! is.na(value)) %>% 
+  select(StartDate, EndDate, RecordedDate, ResponseId, `Select Company`, field_name, value) %>% 
+  mutate(intern_name = str_remove(field_name, "^\\(OPTIONAL\\) Since \\[Field-1\\] was hired[:]{0,1} - "),
+         intern_name = str_extract(intern_name, "[A-Za-z ]+"),
+         name = case_when(
+           str_detect(field_name, "Was this intern eligible to be hired at the completion of their internship?") ~ "eligible_for_hire",
+           str_detect(field_name, "get offered a position?") ~ "offered_position",
+           str_detect(field_name, "accept the position?") ~ "accepted_position",
+           str_detect(field_name, "Is this position located in Delaware?") ~ "in_delaware",
+           str_detect(field_name, "What is their job title?") ~ "title",
+           str_detect(field_name, "What salary were they offered?") ~ "salary"
+         )) %>% 
+  select(`Select Company`, intern_name, name, value) %>% 
+  filter(intern_name != "Field")
+```
+
+```{r}
+retention_clean_wide <-
+  retention_clean_long %>% 
+  pivot_wider(names_from = name,
+              values_from = value) %>% 
+  unchop(everything())
+```
+
+# What percentage of interns were eligible for hire?
+```{r}
+retention_clean_wide %>% 
+  count(eligible_for_hire) %>% 
+  pivot_wider(names_from = eligible_for_hire,
+              values_from = n) %>% 
+ mutate(total = rowSums(across(everything())),
+         percent = Yes / total)
+```
+
+
+# What percentage of interns that were eligible for hire were offered a position?
+```{r}
+retention_clean_wide %>% 
+  filter(eligible_for_hire == "Yes") %>% 
+  count(offered_position) %>% 
+  pivot_wider(names_from = offered_position,
+              values_from = n) %>% 
+  mutate(total = rowSums(across(everything())),
+         percent = Yes / total)
+```
+
+# What percentage of interns that were offered positions accepted the position?
+```{r}
+retention_clean_wide %>% 
+  filter(offered_position == "Yes") %>% 
+  count(accepted_position) %>% 
+  pivot_wider(names_from = accepted_position,
+              values_from = n) %>% 
+  mutate(total = rowSums(across(everything())),
+         percent = Yes / total)
+```
+
+# What percentage of interns that were accepted positions were in Delaware?
+```{r}
+retention_clean_wide %>% 
+  filter(accepted_position == "Yes") %>% 
+  count(in_delaware) %>% 
+  pivot_wider(names_from = in_delaware,
+              values_from = n) %>% 
+  mutate(total = rowSums(across(everything())),
+         percent = Yes / total)
+```
+
+```{r}
+write_csv(retention_clean_wide, "retention_clean_wide.csv")
+```
+
+```{r}
+retention_clean_wide %>% 
+  filter(`Select Company` == "CSC") %>% 
+  mutate(offered_position = if_else(is.na(offered_position) & eligible_for_hire == "Yes", "No", offered_position)) %>%
+  mutate(eligible_for_hire = 
+           case_when(
+             eligible_for_hire == "No" & offered_position == "Yes" ~ "Yes",
+             .default = eligible_for_hire)) %>%
+  pivot_longer(cols = c(-`Select Company`, -intern_name),
+               names_to = "source") %>% 
+  filter(! is.na(value)) %>% 
+  count(source, value) %>% 
+  filter(! source %in% c("salary", "title")) %>% 
+  mutate(target = if_else(value == "No", glue::glue("{source}_{value}"), NA_character_),
+         target = case_when(
+           value == "Yes" & source == "eligible_for_hire" ~ "offered_position",
+           value == "Yes" & source == "offered_position" ~ "accepted_position",
+           value == "Yes" & source == "accepted_position" ~ "in_delaware",
+           value == "Yes" & source == "in_delaware" ~ "Yes",
+           .default = target
+         )) %>% 
+  select(source, target, value, n)
+  
+```
+
+Temporary Sankey Diagram built with sankeymatic.com/build
+
+Code to build Sankey Plot as follows:
+
+
+// Enter Flows between Nodes, like this:
+//         Source [AMOUNT] Target
+
+All Participants [22] Not Eligible
+All Participants [9] Eligible for Hire
+
+Eligible for Hire [5] No Position Offered
+Eligible for Hire [4] Offered Position
+
+
+Offered Position [0] Did Not Accept
+Offered Position [4] Accepted
+
+Accepted [0] Out of Delaware
+Accepted [4] In Delaware
+
+
+
+```{r}
+# A connection data frame is a list of flows with intensity for each flow
+links <- data.frame(
+  source=c("group_A","group_A", "group_B", "group_C", "group_C", "group_E"), 
+  target=c("group_C","group_D", "group_E", "group_F", "group_G", "group_H"), 
+  value=c(2,3, 2, 3, 1, 3)
+  )
+ 
+# From these flows we need to create a node data frame: it lists every entities involved in the flow
+nodes <- data.frame(
+  name=c(as.character(links$source), 
+  as.character(links$target)) %>% unique()
+)
+ 
+# With networkD3, connection must be provided using id, not using real name like in the links dataframe.. So we need to reformat it.
+links$IDsource <- match(links$source, nodes$name)-1 
+links$IDtarget <- match(links$target, nodes$name)-1
+ 
+# Make the Network
+p <- sankeyNetwork(Links = links, Nodes = nodes,
+              Source = "IDsource", Target = "IDtarget",
+              Value = "value", NodeID = "name", 
+              sinksRight=FALSE)
+p
+```
+
